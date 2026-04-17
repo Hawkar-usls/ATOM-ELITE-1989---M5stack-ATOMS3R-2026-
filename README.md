@@ -3,8 +3,8 @@
 **A retro space trading & combat simulator inspired by Elite (1984)**  
 **Running natively on M5Stack Atom Elite** with an **adaptive AI pilot named Janus**.
 
-![M5Stack Atom Elite](https://github.com/user-attachments/assets/ATOM-ELITE-Jan us.png)  
-*(add your screenshot here)*
+![M5Stack Atom Elite]
+<img width="1920" height="2560" alt="Elite" src="https://github.com/user-attachments/assets/caee3e32-a127-4c13-94b1-ec584105b4c5" />
 
 ## ✨ Features
 
