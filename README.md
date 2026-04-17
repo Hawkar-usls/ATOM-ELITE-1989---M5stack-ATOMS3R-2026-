@@ -75,10 +75,4 @@ Feel free to fork, modify, and fly it into the black.
 
 ---
 
-### Tips for you (the author):
 
-- Replace the image link with an actual screenshot/GIF of the game in action.
-- Add a **Releases** section on GitHub with the compiled `.bin` file for easy flashing.
-- If you want, I can also create a shorter version or a version with more technical details.
-
-Would you like me to also generate a **short version** (for the repo description) or a **CHANGELOG.md**? Just say the word! 🚀
