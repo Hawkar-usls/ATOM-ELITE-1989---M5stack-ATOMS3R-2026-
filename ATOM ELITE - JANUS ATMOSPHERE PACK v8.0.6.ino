@@ -3,8 +3,8 @@
 #include <math.h>
 
 // =====================================================
-// ATOM ELITE - JANUS ATMOSPHERE PACK v8.0.6
-// Atmosphere Pack: station variants, escape pods, contraband checks, jump tunnel, dock melody, dock/star fixes.
+// ATOM ELITE - JANUS LEARNING PILOT EDITION v7.6.1
+// Learning pilot full monolith: fixed dock/jump loop, goals, smarter trade/combat, quieter sound.
 // =====================================================
 
 #define SCREEN_W 128
@@ -59,8 +59,7 @@ enum UiMode {
   UI_STATUS = 4,
   UI_MARKET = 5,
   UI_EQUIP = 6,
-  UI_LOCAL = 7,
-  UI_JUMP = 8
+  UI_LOCAL = 7
 };
 
 enum LegalStatus {
@@ -132,25 +131,6 @@ enum DockPhase {
   DOCK_TUNNEL = 3
 };
 
-enum StationType {
-  STATION_CORIOLIS = 0,
-  STATION_DODECA = 1
-};
-
-struct PassengerJob {
-  bool active;
-  uint8_t targetSystem;
-  int reward;
-};
-
-enum PilotArchetype {
-  ARCHETYPE_BALANCED = 0,
-  ARCHETYPE_TRADER = 1,
-  ARCHETYPE_HUNTER = 2,
-  ARCHETYPE_COWARD = 3,
-  ARCHETYPE_PIRATE = 4
-};
-
 struct Debris {
   Vec3 pos;
   Vec3 vel;
@@ -162,13 +142,6 @@ struct CargoCanister {
   Vec3 pos;
   Vec3 vel;
   uint8_t item;
-  uint16_t ttl;
-  bool alive;
-};
-
-struct EscapePod {
-  Vec3 pos;
-  Vec3 vel;
   uint16_t ttl;
   bool alive;
 };
@@ -215,27 +188,30 @@ struct LearnState {
 struct PilotState {
   uint8_t currentSystem;
   uint8_t galaxyIndex;
+
   int credits;
   int fuel;
+
   uint8_t cargoType[EXPANDED_CARGO];
   int cargoBuyPrice[EXPANDED_CARGO];
   uint8_t cargoCount;
+
   int totalProfit;
   int score;
   int kills;
+
   bool docked;
+
   uint8_t legalStatus;
   uint16_t bounty;
   uint32_t equipmentFlags;
+
   uint8_t missionStage;
   uint8_t missionProgress;
   uint8_t missiles;
   uint8_t energyMode;
   uint8_t damagedFlags;
   bool missileIncoming;
-  uint8_t escapePods;
-  PassengerJob passengerJob;
-  int ecmCooldown;
 };
 
 struct AgentState {
@@ -248,12 +224,6 @@ struct AgentState {
   AgentMode mode;
   float aggression;
   float caution;
-
-  float traderInstinct;   // 0..1
-  float riskTolerance;    // 0..1
-  float lawfulness;       // 0..1
-  float curiosity;        // 0..1
-  uint8_t archetype;
 };
 
 struct ShipModel {
@@ -338,16 +308,12 @@ SpaceShip traffic[MAX_TRAFFIC];
 Vec3 stars[STAR_COUNT];
 Debris debris[24];
 CargoCanister canisters[10];
-EscapePod escapePods[6];
 LearnState learnState;
 bool justDied = false;
 DeathCause lastDeathCause = DEATH_NONE;
 unsigned long survivalStartMs = 0;
 PilotGoal currentGoal = GOAL_NONE;
 bool alreadyJumpedThisDock = false;
-StationType currentStationType = STATION_CORIOLIS;
-int dockAlignTicks = 0;
-unsigned long lastPoliceScanRoll = 0;
 
 UiMode uiMode = UI_FLIGHT;
 StationServiceStep stationStep = SERVICE_IDLE;
@@ -379,6 +345,8 @@ int stationStepTimer = 0;
 int jumpTimer = 0;
 int tunnelTimer = 0;
 uint8_t jumpTargetSystem = 0;
+uint8_t pendingJumpSystem = 255;
+int launchLockout = 0;
 
 uint8_t brightnessIndex = 2;
 const uint8_t brightnessLevels[4] = {32, 96, 160, 255};
@@ -497,18 +465,6 @@ const Edge coriolisEdges[] = {
   {0,1},{0,2},{0,3},{0,4},{1,2},{1,3},{2,4},{3,4},{5,1},{5,2},{5,3},{5,4}
 };
 
-const Vec3 dodecaVerts[] = {
-  {0,0,28}, {18,0,10}, {-18,0,10}, {0,18,10}, {0,-18,10},
-  {18,18,-10}, {18,-18,-10}, {-18,18,-10}, {-18,-18,-10}, {0,0,-28}
-};
-const Edge dodecaEdges[] = {
-  {0,1},{0,2},{0,3},{0,4},
-  {1,5},{1,6},{3,5},{4,6},
-  {2,7},{2,8},{3,7},{4,8},
-  {5,9},{6,9},{7,9},{8,9},
-  {5,7},{6,8}
-};
-
 ShipModel shipModels[] = {
   {cobraVerts,       cobraEdges,       7, 11},
   {mambaVerts,       mambaEdges,       7, 11},
@@ -539,8 +495,7 @@ ShipStats shipStats[] = {
   {125.0f,0.17f, 0.022f,  5}
 };
 
-ShipModel coriolisStationModel = {coriolisVerts, coriolisEdges, 6, 12};
-ShipModel dodecaStationModel = {dodecaVerts, dodecaEdges, 10, 18};
+ShipModel stationModel = {coriolisVerts, coriolisEdges, 6, 12};
 
 // -----------------------------------------------------
 // SOUND INIT
@@ -619,6 +574,16 @@ void saveBestAgentIfImproved() {
   saveLearnState();
 }
 
+
+bool canAffordAnyCommodityFor(uint8_t target) {
+  for (uint8_t i = 0; i < MAX_MARKET_ITEMS; ++i) {
+    int buyHere = getCommodityPrice(i, galaxy[pilot.currentSystem]);
+    int sellThere = getCommodityPrice(i, galaxy[target]);
+    if (sellThere > buyHere && pilot.credits >= buyHere) return true;
+  }
+  return false;
+}
+
 void loadBestAgentIfAvailable() {
   if (!LittleFS.exists(SAVE_BEST_AGENT_FILE)) return;
   File f = LittleFS.open(SAVE_BEST_AGENT_FILE, "r");
@@ -692,7 +657,6 @@ void analyzeAndAdapt() {
 
 void onRespawnLearning() {
   analyzeAndAdapt();
-  mutatePersonalityAfterDeath(lastDeathCause);
   // tiny mutation, but only around current/best brain
   for (int i = 0; i < 12; ++i) {
     janus.w[i] += frandRange(-0.015f, 0.015f);
@@ -701,12 +665,7 @@ void onRespawnLearning() {
   janus.caution += frandRange(-0.02f, 0.02f);
   janus.aggression = clampf(janus.aggression, 0.12f, 0.95f);
   janus.caution = clampf(janus.caution, 0.12f, 0.98f);
-  janus.traderInstinct = clampf(janus.traderInstinct, 0.0f, 1.0f);
-  janus.riskTolerance = clampf(janus.riskTolerance, 0.0f, 1.0f);
-  janus.lawfulness = clampf(janus.lawfulness, 0.0f, 1.0f);
-  janus.curiosity = clampf(janus.curiosity, 0.0f, 1.0f);
   pilot.damagedFlags = DMG_NONE;
-  pilot.escapePods = 0;
   justDied = false;
   survivalStartMs = millis();
 }
@@ -912,65 +871,12 @@ void defaultPilot() {
   pilot.equipmentFlags = EQ_NONE;
   pilot.missionStage = MISSION_NONE;
   pilot.missionProgress = 0;
-  pilot.missiles = 2;
+  pilot.missiles = 0;
   pilot.energyMode = 0;
   pilot.damagedFlags = DMG_NONE;
-  pilot.escapePods = 0;
   pilot.missileIncoming = false;
-  pilot.passengerJob.active = false;
-  pilot.passengerJob.targetSystem = 0;
-  pilot.passengerJob.reward = 0;
-  pilot.ecmCooldown = 0;
-  pilot.escapePods = 0;
 }
 
-
-const char* getArchetypeName(uint8_t a) {
-  switch (a) {
-    case ARCHETYPE_TRADER: return "TRADER";
-    case ARCHETYPE_HUNTER: return "HUNTER";
-    case ARCHETYPE_COWARD: return "COWARD";
-    case ARCHETYPE_PIRATE: return "PIRATE";
-    default: return "BALANCED";
-  }
-}
-
-bool hasVisitedSystem(uint8_t sys) {
-  return learnState.systemDeathPenalty[sys] > 0.0f || sys == pilot.currentSystem;
-}
-
-void setArchetype(PilotArchetype a) {
-  janus.archetype = (uint8_t)a;
-  if (a == ARCHETYPE_TRADER) {
-    janus.traderInstinct = 0.90f; janus.riskTolerance = 0.30f; janus.lawfulness = 0.80f; janus.curiosity = 0.40f;
-  } else if (a == ARCHETYPE_HUNTER) {
-    janus.traderInstinct = 0.20f; janus.riskTolerance = 0.80f; janus.lawfulness = 0.30f; janus.curiosity = 0.70f;
-  } else if (a == ARCHETYPE_COWARD) {
-    janus.traderInstinct = 0.55f; janus.riskTolerance = 0.10f; janus.lawfulness = 0.90f; janus.curiosity = 0.20f;
-  } else if (a == ARCHETYPE_PIRATE) {
-    janus.traderInstinct = 0.30f; janus.riskTolerance = 0.90f; janus.lawfulness = 0.10f; janus.curiosity = 0.60f;
-  } else {
-    janus.traderInstinct = 0.50f; janus.riskTolerance = 0.50f; janus.lawfulness = 0.50f; janus.curiosity = 0.50f;
-  }
-}
-
-void mutatePersonalityAfterDeath(DeathCause cause) {
-  if (cause == DEATH_POLICE) janus.lawfulness = clampf(janus.lawfulness + 0.08f, 0.0f, 1.0f);
-  if (cause == DEATH_ENEMY) janus.riskTolerance = clampf(janus.riskTolerance - 0.06f, 0.0f, 1.0f);
-  if (cause == DEATH_COLLISION || cause == DEATH_DOCK) janus.riskTolerance = clampf(janus.riskTolerance - 0.04f, 0.0f, 1.0f);
-  if (cause == DEATH_SUN) janus.curiosity = clampf(janus.curiosity - 0.03f, 0.0f, 1.0f);
-
-  janus.traderInstinct = clampf(janus.traderInstinct + frandRange(-0.02f, 0.02f), 0.0f, 1.0f);
-  janus.riskTolerance = clampf(janus.riskTolerance + frandRange(-0.02f, 0.02f), 0.0f, 1.0f);
-  janus.lawfulness = clampf(janus.lawfulness + frandRange(-0.02f, 0.02f), 0.0f, 1.0f);
-  janus.curiosity = clampf(janus.curiosity + frandRange(-0.02f, 0.02f), 0.0f, 1.0f);
-}
-
-void rewardPersonalityFromSuccess() {
-  if (pilot.totalProfit > 300) janus.traderInstinct = clampf(janus.traderInstinct + 0.02f, 0.0f, 1.0f);
-  if (pilot.kills > 8) janus.riskTolerance = clampf(janus.riskTolerance + 0.02f, 0.0f, 1.0f);
-  if (pilot.bounty == 0) janus.lawfulness = clampf(janus.lawfulness + 0.01f, 0.0f, 1.0f);
-}
 void defaultAgent() {
   memset(&janus, 0, sizeof(janus));
   float base[12] = {
@@ -989,7 +895,6 @@ void defaultAgent() {
   janus.mode = MODE_DOCKED;
   janus.aggression = 0.5f;
   janus.caution = 0.5f;
-  setArchetype((PilotArchetype)random(0, 5));
 }
 
 void saveState() {
@@ -1077,7 +982,6 @@ void galacticJump() {
   if (!hasEquipment(EQ_GAL_HYPERDRIVE)) return;
   pilot.galaxyIndex = (pilot.galaxyIndex + 1) & 7;
   generateGalaxy(pilot.galaxyIndex);
-  selectStationType();
   pilot.currentSystem = random(0, MAX_SYSTEMS);
   pilot.fuel = 70;
   pilot.docked = true;
@@ -1248,10 +1152,8 @@ bool completeVisibleJump() {
   pilot.docked = true;
   jumpInProgress = false;
   uiMode = UI_MARKET;
-  if (jumpTargetSystem < MAX_SYSTEMS) statusLine = String("ARRIVED ") + galaxy[jumpTargetSystem].name;
-  else statusLine = "ARRIVED";
+  statusLine = String("ARRIVED ") + galaxy[jumpTargetSystem].name;
   playJumpSound();
-  selectStationType();
 
   stationFlowActive = true;
   stationStep = SERVICE_MARKET;
@@ -1279,245 +1181,11 @@ void beginDockRun() {
 // -----------------------------------------------------
 // WORLD OBJECTS
 // -----------------------------------------------------
-
-
-bool scannerOperational() {
-  return !isDamaged(DMG_SCANNER);
-}
-
-void maybeGeneratePassengerJob() {
-  if (pilot.passengerJob.active) return;
-  if (random(0, 100) >= 28) return;
-  uint8_t target = random(0, MAX_SYSTEMS);
-  if (target == pilot.currentSystem) target = (target + 1) % MAX_SYSTEMS;
-  pilot.passengerJob.active = true;
-  pilot.passengerJob.targetSystem = target;
-  pilot.passengerJob.reward = 140 + fuelCostTo(target) * 18 + random(0, 80);
-}
-
-void processPassengerJobAtStation() {
-  if (!pilot.passengerJob.active) {
-    maybeGeneratePassengerJob();
-    return;
-  }
-  if (pilot.currentSystem == pilot.passengerJob.targetSystem) {
-    pilot.credits += pilot.passengerJob.reward;
-    statusLine = "PASSENGER OK";
-    pilot.passengerJob.active = false;
-    pilot.passengerJob.targetSystem = 0;
-    pilot.passengerJob.reward = 0;
-  }
-}
-
-void updateECMCooldown() {
-  if (pilot.ecmCooldown > 0) pilot.ecmCooldown--;
-}
-
-void attemptECM() {
-  if (!hasEquipment(EQ_ECM)) return;
-  if (pilot.ecmCooldown > 0) return;
-  if (shipEnergy < 10.0f) return;
-  shipEnergy -= 10.0f;
-  pilot.ecmCooldown = 90;
-  pilot.missileIncoming = false;
-  statusLine = "ECM";
-  playToneSafe(520, 50);
-}
-
-int nearestEnemyIndexInSight() {
-  int idx = -1;
-  float bestZ = 999999.0f;
-  for (int i = 0; i < MAX_ENEMIES; ++i) {
-    if (!enemies[i].alive) continue;
-    if (enemies[i].pos.z > 0.0f && enemies[i].pos.z < bestZ) {
-      bestZ = enemies[i].pos.z;
-      idx = i;
-    }
-  }
-  return idx;
-}
-
-void processPoliceScanInFlight() {
-  if (pilot.docked) return;
-  if (millis() - lastPoliceScanRoll < 5000) return;
-  lastPoliceScanRoll = millis();
-
-  if (galaxy[pilot.currentSystem].government <= 4) return;
-
-  bool policePresent = false;
-  for (int i = 0; i < MAX_ENEMIES; ++i) {
-    if (enemies[i].alive && enemies[i].role == ROLE_POLICE) {
-      policePresent = true;
-      break;
-    }
-  }
-
-  if (!policePresent && random(0, 100) >= 14) return;
-
-  int illegalFound = 0;
-  for (int i = 0; i < pilot.cargoCount; ++i) {
-    if (isIllegalCommodity(pilot.cargoType[i], galaxy[pilot.currentSystem])) illegalFound++;
-  }
-  if (pilot.escapePods > 0 && galaxy[pilot.currentSystem].government > 4) illegalFound += pilot.escapePods;
-
-  if (illegalFound > 0) {
-    pilot.bounty += 20 + illegalFound * 10;
-    pilot.legalStatus = (pilot.bounty >= 80) ? LEGAL_FUGITIVE : LEGAL_OFFENDER;
-    statusLine = "POLICE SCAN";
-    spawnPoliceWing();
-  } else {
-    statusLine = "SCAN CLEAR";
-  }
-}
-
-void drawCargoScanInfo() {
-  if (!scannerOperational()) return;
-  int idx = nearestEnemyIndexInSight();
-  if (idx < 0) return;
-  if (enemies[idx].pos.z > 50.0f) return;
-
-  const char* cargoHint = "EMPTY";
-  if (enemies[idx].role == ROLE_TRADER) cargoHint = "TRADE";
-  else if (enemies[idx].type == SHIP_TRANSPORT || enemies[idx].type == SHIP_PYTHON || enemies[idx].type == SHIP_ANACONDA) cargoHint = "HEAVY";
-  else if (enemies[idx].role == ROLE_POLICE) cargoHint = "POLICE";
-  else if (enemies[idx].role == ROLE_PIRATE) cargoHint = "PLUNDER";
-
-  M5.Display.setTextColor(UI_AMBER_BRIGHT, TFT_BLACK);
-  M5.Display.setCursor(2, 90);
-  M5.Display.print("SCAN ");
-  M5.Display.print(cargoHint);
-}
-ShipModel& getCurrentStationModel() {
-  return (currentStationType == STATION_DODECA) ? dodecaStationModel : coriolisStationModel;
-}
-
-void selectStationType() {
-  currentStationType = (galaxy[pilot.currentSystem].techLevel >= 8) ? STATION_CORIOLIS : STATION_DODECA;
-}
-
-void resetEscapePods() {
-  for (int i = 0; i < 6; ++i) {
-    escapePods[i].alive = false;
-    escapePods[i].ttl = 0;
-    escapePods[i].pos = {0,0,0};
-    escapePods[i].vel = {0,0,0};
-  }
-}
-
-void spawnEscapePod(const Vec3 &origin) {
-  for (int i = 0; i < 6; ++i) {
-    if (!escapePods[i].alive) {
-      escapePods[i].alive = true;
-      escapePods[i].ttl = 700;
-      escapePods[i].pos = origin;
-      escapePods[i].vel = {frandRange(-0.12f, 0.12f), frandRange(-0.08f, 0.08f), frandRange(-0.03f, 0.06f)};
-      return;
-    }
-  }
-}
-
-void updateEscapePods() {
-  for (int i = 0; i < 6; ++i) {
-    if (!escapePods[i].alive) continue;
-    escapePods[i].pos.x += escapePods[i].vel.x;
-    escapePods[i].pos.y += escapePods[i].vel.y;
-    escapePods[i].pos.z += escapePods[i].vel.z - shipSpeed * 0.9f;
-    if (escapePods[i].ttl > 0) escapePods[i].ttl--;
-    float d = sqrtf(escapePods[i].pos.x*escapePods[i].pos.x + escapePods[i].pos.y*escapePods[i].pos.y + escapePods[i].pos.z*escapePods[i].pos.z);
-    if (d < 12.0f) {
-      pilot.escapePods++;
-      escapePods[i].alive = false;
-      statusLine = "POD RECOVER";
-      playToneSafe(720, 40);
-    }
-    if (escapePods[i].ttl == 0 || escapePods[i].pos.z < 3 || escapePods[i].pos.z > 260) {
-      escapePods[i].alive = false;
-    }
-  }
-}
-
-bool isIllegalCommodity(uint8_t item, const StarSystem &sys) {
-  // strict systems treat liquor and luxuries as contraband
-  if (sys.government > 4) {
-    if (item == 2 || item == 3) return true; // Liquor, Luxuries
-  }
-  return false;
-}
-
-void processContrabandCheck() {
-  if (galaxy[pilot.currentSystem].government <= 4) return;
-  if (random(0, 100) >= 20) return;
-
-  int illegalFound = 0;
-  for (int i = 0; i < pilot.cargoCount; ++i) {
-    if (isIllegalCommodity(pilot.cargoType[i], galaxy[pilot.currentSystem])) illegalFound++;
-  }
-  if (pilot.escapePods > 0) illegalFound += pilot.escapePods;
-
-  if (illegalFound > 0) {
-    pilot.bounty += 50 + illegalFound * 20;
-    pilot.legalStatus = (pilot.bounty >= 80) ? LEGAL_FUGITIVE : LEGAL_OFFENDER;
-    statusLine = "CUSTOMS!";
-    playToneSafe(240, 80);
-  } else {
-    statusLine = "CLEARANCE";
-  }
-}
-
-void processRescuedPodsAtStation() {
-  if (pilot.escapePods == 0) return;
-  if (galaxy[pilot.currentSystem].government > 4) {
-    // lawful surrender
-    int reward = pilot.escapePods * (50 + random(0, 40));
-    pilot.credits += reward;
-    statusLine = "POD REWARD";
-  } else {
-    // black market sale in rough systems
-    int reward = pilot.escapePods * (120 + random(0, 60));
-    pilot.credits += reward;
-    pilot.bounty += pilot.escapePods * 8;
-    if (pilot.bounty >= 20 && pilot.legalStatus == LEGAL_CLEAN) pilot.legalStatus = LEGAL_OFFENDER;
-    statusLine = "BLACK SALE";
-  }
-  pilot.escapePods = 0;
-}
-
-void playDockMelody() {
-  if (!hasEquipment(EQ_DOCK_COMPUTER)) return;
-  if (!soundEnabled) return;
-  // short docking-computer melody nod, intentionally lightweight
-  playToneSafe(523, 40);
-  delay(8);
-  playToneSafe(659, 40);
-  delay(8);
-  playToneSafe(784, 50);
-}
-
-void drawJumpTunnelScreen() {
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(UI_AMBER_BRIGHT, TFT_BLACK);
-  int cx = SCREEN_W / 2;
-  int cy = SCREEN_H / 2;
-  for (int i = 0; i < 26; ++i) {
-    float a = (i / 26.0f) * 6.2831853f + (millis() * 0.0025f);
-    int len = 10 + ((i * 7 + jumpTimer * 3) % 54);
-    int x2 = cx + (int)(cosf(a) * len);
-    int y2 = cy + (int)(sinf(a) * len);
-    M5.Display.drawLine(cx, cy, x2, y2, (i % 2) ? UI_SOFT : UI_AMBER_BRIGHT);
-  }
-  M5.Display.setCursor(2, 2);
-  M5.Display.print("HYPERSPACE");
-  M5.Display.setCursor(2, 118);
-  if (jumpTargetSystem < MAX_SYSTEMS) M5.Display.printf("%s", galaxy[jumpTargetSystem].name);
-  else M5.Display.print("HYPER");
-}
-
 void resetStars() {
   for (int i = 0; i < STAR_COUNT; ++i) {
-    stars[i].x = frandRange(-140, 140);
-    stars[i].y = frandRange(-140, 140);
-    stars[i].z = frandRange(-200, 200);
-    if (fabsf(stars[i].z) < 12.0f) stars[i].z = (stars[i].z < 0 ? -24.0f : 24.0f);
+    stars[i].x = frandRange(-90, 90);
+    stars[i].y = frandRange(-90, 90);
+    stars[i].z = frandRange(20, 200);
   }
 }
 
@@ -1584,7 +1252,7 @@ void spawnPoliceWing() {
       enemies[i].role = ROLE_POLICE;
       enemies[i].type = SHIP_VIPER;
       enemies[i].hp = shipStats[SHIP_VIPER].hp;
-      enemies[i].pos = {frandRange(-30, 30), frandRange(-14, 14), frandRange(105, 135)};
+      enemies[i].pos = {frandRange(-45, 45), frandRange(-20, 20), frandRange(110, 150)};
       enemies[i].vel = {frandRange(-0.09f, 0.09f), frandRange(-0.05f, 0.05f), frandRange(-0.18f, -0.06f)};
     }
   }
@@ -1642,7 +1310,7 @@ void spawnThargoidEncounter() {
     enemies[i].role = ROLE_THARGOID;
     enemies[i].type = SHIP_THARGOID;
     enemies[i].hp = shipStats[SHIP_THARGOID].hp;
-    enemies[i].pos = {frandRange(-28, 28), frandRange(-12, 12), frandRange(105, 135)};
+    enemies[i].pos = {frandRange(-40, 40), frandRange(-20, 20), frandRange(110, 150)};
     enemies[i].vel = {frandRange(-0.05f, 0.05f), frandRange(-0.05f, 0.05f), frandRange(-0.18f, -0.06f)};
   }
   statusLine = "THARGOID";
@@ -1669,10 +1337,6 @@ void launchScene() {
   stationFlowActive = false;
   stationStep = SERVICE_IDLE;
   uiMode = UI_FLIGHT;
-  dockPhase = DOCK_NONE;
-  currentGoal = GOAL_NONE;
-  alreadyJumpedThisDock = false;
-  selectStationType();
 
   shipSpeed = 0.10f;
   shipYaw = 0.0f;
@@ -1684,17 +1348,14 @@ void launchScene() {
   resetEnemies();
   resetDebris();
   resetCanisters();
-  resetEscapePods();
   initTraffic();
-  pilot.passengerJob.active = false;
-  pilot.passengerJob.targetSystem = 0;
-  pilot.passengerJob.reward = 0;
 
-  stationPos = {0.0f, 0.0f, 320.0f};
+  stationPos = {0.0f, 0.0f, 250.0f};
   planetPos = {0.0f, 0.0f, 320.0f};
   sunPos = {80.0f, -40.0f, 420.0f};
 
   launchTimer = 50;
+  launchLockout = 140;
   patrolTimer = 0;
   returnTimer = 0;
   dockTimer = 0;
@@ -1711,7 +1372,6 @@ void beginStationFlow() {
   stationStep = SERVICE_MARKET;
   stationStepTimer = 40;
   uiMode = UI_MARKET;
-  alreadyJumpedThisDock = false;
   statusLine = "MARKET";
 }
 
@@ -1726,9 +1386,6 @@ void updateStationFlow() {
   switch (stationStep) {
     case SERVICE_MARKET:
       sellAllCargoHere();
-      processContrabandCheck();
-      processRescuedPodsAtStation();
-      processPassengerJobAtStation();
       refuelAtStation();
       uiMode = UI_MARKET;
       statusLine = "MARKET";
@@ -1763,7 +1420,6 @@ void updateStationFlow() {
       stationFlowActive = false;
       stationStep = SERVICE_IDLE;
       uiMode = UI_FLIGHT;
-      dockTimer = 0;   // let janusDockedDecision run next, do NOT restart station flow
       statusLine = "LAUNCH PREP";
       break;
 
@@ -1778,22 +1434,6 @@ void updateStationFlow() {
 // -----------------------------------------------------
 // PROJECTION / DRAW
 // -----------------------------------------------------
-
-bool enemyScreenVisible(const SpaceShip &e, int &sx, int &sy, float &d) {
-  return projectPoint(e.pos, sx, sy, d);
-}
-
-void drawEnemyEdgeMarker(const SpaceShip &e, uint16_t color) {
-  int sx, sy; float d;
-  if (!projectPoint(e.pos, sx, sy, d)) return;
-  int mx = sx;
-  int my = sy;
-  if (mx < 2) mx = 2;
-  if (mx > SCREEN_W - 3) mx = SCREEN_W - 3;
-  if (my < 24) my = 24;
-  if (my > 95) my = 95;
-  M5.Display.drawRect(mx - 1, my - 1, 3, 3, color);
-}
 bool projectPoint(const Vec3 &p, int &sx, int &sy, float &depth) {
   float cosy = cosf(shipYaw), siny = sinf(shipYaw);
   float cosp = cosf(shipPitch), sinp = sinf(shipPitch);
@@ -1877,7 +1517,6 @@ void drawClassicEliteScanner() {
   int cy = 116;
   int rx = 34;
   int ry = 9;
-  bool scannerOk = scannerOperational();
 
   M5.Display.drawEllipse(cx, cy + 2, rx + 3, ry + 2, UI_DIM);
   M5.Display.drawEllipse(cx, cy, rx, ry, UI_REDGRID);
@@ -1892,7 +1531,7 @@ void drawClassicEliteScanner() {
     int px = cx + (int)(enemies[i].pos.x * 0.22f);
     int py = cy + (int)((enemies[i].pos.z - 110.0f) * -0.020f);
 
-    if (scannerOk && px > cx - rx + 1 && px < cx + rx - 1 && py > cy - ry + 1 && py < cy + ry - 1) {
+    if (px > cx - rx + 1 && px < cx + rx - 1 && py > cy - ry + 1 && py < cy + ry - 1) {
       uint16_t c = TFT_GREEN;
       if (enemies[i].role == ROLE_POLICE) c = TFT_YELLOW;
       else if (enemies[i].role == ROLE_THARGOID || enemies[i].role == ROLE_THARGON) c = TFT_MAGENTA;
@@ -1907,13 +1546,12 @@ void drawClassicEliteScanner() {
     int px = cx + (int)(traffic[i].pos.x * 0.14f);
     int py = cy + (int)((traffic[i].pos.z - 110.0f) * -0.014f);
 
-    if (scannerOk && px > cx - rx + 1 && px < cx + rx - 1 && py > cy - ry + 1 && py < cy + ry - 1) {
+    if (px > cx - rx + 1 && px < cx + rx - 1 && py > cy - ry + 1 && py < cy + ry - 1) {
       M5.Display.drawPixel(px, py, TFT_GREEN);
     }
   }
 
-  if (scannerOk) M5.Display.drawPixel(cx, cy, TFT_GREEN);
-  else M5.Display.drawFastHLine(cx - 5, cy, 10, TFT_RED);
+  M5.Display.drawPixel(cx, cy, TFT_GREEN);
 }
 
 void drawClassicEliteBottomHud() {
@@ -1998,7 +1636,6 @@ void drawEliteHUD() {
   drawRight(22, right4, UI_AMBER_BRIGHT);
 
   drawClassicEliteBottomHud();
-  drawCargoScanInfo();
 
   M5.Display.setTextColor(UI_AMBER_BRIGHT, TFT_BLACK);
   M5.Display.setCursor(2, 98);
@@ -2124,7 +1761,7 @@ void drawDockedScreen() {
   stationSpin += 0.015f;
   float ox = sinf(stationSpin) * 4.0f;
   float oy = cosf(stationSpin * 0.7f) * 3.0f;
-  drawWireModel(getCurrentStationModel(), {ox, oy, 140}, TFT_WHITE);
+  drawWireModel(stationModel, {ox, oy, 140}, TFT_WHITE);
   drawCrosshair();
   drawEliteHUD();
 }
@@ -2138,7 +1775,7 @@ void drawFlightScreen() {
     Vec3 liveStation = stationPos;
     liveStation.x = sinf(stationSpin) * 6.0f;
     liveStation.y = cosf(stationSpin * 0.7f) * 5.0f;
-    drawWireModel(getCurrentStationModel(), liveStation, TFT_WHITE);
+    drawWireModel(stationModel, liveStation, TFT_WHITE);
 
     if (dockPhase == DOCK_TUNNEL) {
       int cx = SCREEN_W / 2;
@@ -2166,14 +1803,6 @@ void drawFlightScreen() {
     }
   }
 
-  for (int i = 0; i < 6; ++i) {
-    if (!escapePods[i].alive) continue;
-    int sx, sy; float d;
-    if (projectPoint(escapePods[i].pos, sx, sy, d)) {
-      M5.Display.drawCircle(sx, sy, 2, TFT_CYAN);
-    }
-  }
-
   for (int i = 0; i < MAX_TRAFFIC; ++i) {
     if (traffic[i].alive) drawWireModel(shipModels[traffic[i].type], traffic[i].pos, UI_DIM);
   }
@@ -2184,13 +1813,7 @@ void drawFlightScreen() {
     if (enemies[i].role == ROLE_POLICE) col = TFT_YELLOW;
     else if (enemies[i].role == ROLE_THARGOID || enemies[i].role == ROLE_THARGON) col = TFT_MAGENTA;
     else if (enemies[i].role == ROLE_BOSS) col = TFT_CYAN;
-
-    int esx, esy; float ed;
-    if (enemyScreenVisible(enemies[i], esx, esy, ed)) {
-      drawWireModel(shipModels[enemies[i].type], enemies[i].pos, col);
-    } else if (enemies[i].pos.z > 0.0f) {
-      drawEnemyEdgeMarker(enemies[i], col);
-    }
+    drawWireModel(shipModels[enemies[i].type], enemies[i].pos, col);
   }
 
   if (laserFiring) {
@@ -2231,7 +1854,6 @@ void drawLocalMapScreen() {
 }
 
 void renderTick() {
-  if (uiMode == UI_JUMP || jumpInProgress) { drawJumpTunnelScreen(); return; }
   if (uiMode == UI_WITCHSPACE) { drawWitchSpaceScreen(); return; }
   if (uiMode == UI_MAP)        { drawGalaxyMapScreen(); return; }
   if (uiMode == UI_MISSION)    { drawMissionScreen(); return; }
@@ -2376,57 +1998,42 @@ void janusBuyEquipment() {
   }
 }
 
-
 void janusPlanTrade(uint8_t target) {
+  if (target == pilot.currentSystem) return;
   int capacity = cargoLimit() - pilot.cargoCount;
   if (capacity <= 0) return;
 
-  struct ItemScore {
+  struct TradeOption {
     uint8_t item;
-    int score;
-    int price;
+    int profit;
   };
-  ItemScore scored[MAX_MARKET_ITEMS];
 
-  for (uint8_t i = 0; i < MAX_MARKET_ITEMS; ++i) {
+  TradeOption opts[MAX_MARKET_ITEMS];
+  for (int i = 0; i < MAX_MARKET_ITEMS; ++i) {
     int buyHere = getCommodityPrice(i, galaxy[pilot.currentSystem]);
     int sellThere = getCommodityPrice(i, galaxy[target]);
-    int score = sellThere - buyHere;
-
-    score += (int)(janus.traderInstinct * 6.0f);
-    if (janus.lawfulness > 0.7f && isIllegalCommodity(i, galaxy[target])) score -= 25;
-    if (janus.lawfulness < 0.3f && isIllegalCommodity(i, galaxy[target])) score += 8;
-    if (janus.curiosity > 0.7f && !hasVisitedSystem(target)) score += 4;
-
-    // Safe explicit assignment instead of brace-init on embedded toolchains.
-    scored[i].item = i;
-    scored[i].score = score;
-    scored[i].price = buyHere;
+    opts[i].item = i;
+    opts[i].profit = sellThere - buyHere;
   }
 
-  // Stable selection-style sort, avoids fragile index mistakes.
-  for (int i = 0; i < MAX_MARKET_ITEMS - 1; ++i) {
+  for (int i = 0; i < MAX_MARKET_ITEMS; ++i) {
     for (int j = i + 1; j < MAX_MARKET_ITEMS; ++j) {
-      if (scored[j].score > scored[i].score) {
-        ItemScore temp = scored[i];
-        scored[i] = scored[j];
-        scored[j] = temp;
+      if (opts[j].profit > opts[i].profit) {
+        TradeOption t = opts[i];
+        opts[i] = opts[j];
+        opts[j] = t;
       }
     }
   }
 
-  int willingness = 1 + (int)(janus.traderInstinct * 3.0f);
-  for (int n = 0; n < MAX_MARKET_ITEMS && capacity > 0; ++n) {
-    if (scored[n].score <= 0) continue;
-
-    int desired = 1 + willingness + (int)random(0, 3);
-    int amount = (capacity < desired) ? capacity : desired;
-
-    while (amount > 0 && capacity > 0 && pilot.credits >= scored[n].price) {
-      if (!buyCommodity(scored[n].item)) break;
-      capacity--;
-      amount--;
+  for (int i = 0; i < MAX_MARKET_ITEMS && capacity > 0; ++i) {
+    if (opts[i].profit <= 0) continue;
+    int roll = 2 + (int)random(0, 4);
+    int amount = (capacity < roll) ? capacity : roll;
+    for (int n = 0; n < amount && pilot.cargoCount < cargoLimit(); ++n) {
+      if (!buyCommodity(opts[i].item)) break;
     }
+    capacity = cargoLimit() - pilot.cargoCount;
   }
 }
 
@@ -2444,24 +2051,41 @@ float calculateThreat(const SpaceShip& enemy) {
   return threat;
 }
 
-
 void updateGoal() {
-  int aliveEnemies = 0;
-  for (int i = 0; i < MAX_ENEMIES; ++i) if (enemies[i].alive) aliveEnemies++;
+  int enemyCount = 0;
+  for (int i = 0; i < MAX_ENEMIES; ++i) if (enemies[i].alive) enemyCount++;
 
-  if (pilot.missileIncoming) currentGoal = GOAL_ESCAPE;
-  else if (pilot.passengerJob.active && pilot.currentSystem != pilot.passengerJob.targetSystem && pilot.fuel > 8 && aliveEnemies == 0) currentGoal = GOAL_TRADE;
-  else if (aliveEnemies > 0 && shipShield > 40.0f * (1.0f - janus.riskTolerance * 0.3f)) currentGoal = GOAL_FIGHT;
-  else if (shipShield < 28.0f + (1.0f - janus.riskTolerance) * 22.0f || shipEnergy < 25.0f) currentGoal = GOAL_ESCAPE;
-  else if (pilot.fuel < (12.0f - janus.riskTolerance * 3.0f) && hasEquipment(EQ_FUEL_SCOOP)) currentGoal = GOAL_REFUEL;
-  else if (pilot.cargoCount >= cargoLimit() * (0.8f - janus.traderInstinct * 0.2f)) currentGoal = GOAL_DOCK;
-  else if (pilot.credits > 300 && random(0,100) < (10 + (int)(janus.curiosity * 20.0f))) currentGoal = GOAL_UPGRADE;
-  else currentGoal = GOAL_TRADE;
-
-  if (currentGoal == GOAL_FIGHT) pilot.energyMode = 2;
-  else if (currentGoal == GOAL_ESCAPE) pilot.energyMode = 3;
-  else if (currentGoal == GOAL_DOCK) pilot.energyMode = 1;
-  else pilot.energyMode = 0;
+  if (shipShield < 25.0f || shipEnergy < 20.0f) {
+    pilot.energyMode = 3;
+    currentGoal = GOAL_ESCAPE;
+    return;
+  }
+  if (pilot.missionStage != MISSION_NONE && pilot.missionProgress == 0) {
+    currentGoal = GOAL_MISSION;
+    return;
+  }
+  if (enemyCount > 0 && shipShield > 40.0f && dockPhase == DOCK_NONE) {
+    pilot.energyMode = 2;
+    currentGoal = GOAL_FIGHT;
+    return;
+  }
+  if (pilot.fuel < 20 && hasEquipment(EQ_FUEL_SCOOP) && !pilot.docked) {
+    pilot.energyMode = 3;
+    currentGoal = GOAL_REFUEL;
+    return;
+  }
+  if (pilot.cargoCount >= cargoLimit() * 0.8f || pilot.fuel < 30) {
+    pilot.energyMode = 1;
+    currentGoal = GOAL_DOCK;
+    return;
+  }
+  if (pilot.docked) {
+    if (pilot.credits > 500 && !hasAllCoreEquipment()) currentGoal = GOAL_UPGRADE;
+    else currentGoal = GOAL_TRADE;
+    return;
+  }
+  pilot.energyMode = 0;
+  currentGoal = GOAL_TRADE;
 }
 
 uint8_t pickBestTradeItem(uint8_t target) {
@@ -2483,7 +2107,6 @@ uint8_t pickBestTradeItem(uint8_t target) {
   return bestItem;
 }
 
-
 uint8_t pickTradeTarget() {
   int bestScore = -9999;
   uint8_t bestTarget = pilot.currentSystem;
@@ -2494,27 +2117,7 @@ uint8_t pickTradeTarget() {
     if (fuelCost > pilot.fuel) continue;
 
     int score = bestCommodityMarginHere(i) - fuelCost * 2 - galaxy[i].danger;
-    score -= (int)(learnState.systemDeathPenalty[i] * 40.0f * (1.0f + janus.riskTolerance * 0.5f));
-
-    // Trader prefers safe systems and earlier selling.
-    score += (int)(janus.traderInstinct * 12.0f * (7 - galaxy[i].danger));
-
-    // Lawful pilot avoids police trouble when dirty.
-    if (janus.lawfulness > 0.7f && pilot.legalStatus != LEGAL_CLEAN && galaxy[i].government > 4) {
-      score -= 50;
-    }
-
-    // Curious pilot likes unseen systems.
-    if (janus.curiosity > 0.7f && !hasVisitedSystem(i)) {
-      score += 20;
-    }
-
-    // Pirate / risk-tolerant prefers rougher worlds if already criminal.
-    if (janus.lawfulness < 0.3f && pilot.legalStatus != LEGAL_CLEAN) {
-      score += (int)(galaxy[i].danger * 3);
-      score -= (int)(galaxy[i].government * 3);
-    }
-
+    score -= (int)(learnState.systemDeathPenalty[i] * 40.0f);
     if (score > bestScore) {
       bestScore = score;
       bestTarget = i;
@@ -2555,38 +2158,22 @@ void janusPrepareLaunch() {
 void janusCombatDecision() {
   float f[12];
   buildFeatures(f);
+
   laserFiring = false;
 
   int targetIndex = -1;
   float maxThreat = -1.0f;
   for (int i = 0; i < MAX_ENEMIES; ++i) {
-    if (!enemies[i].alive || enemies[i].pos.z <= 10.0f) continue;
-
-    int visx, visy; float visd;
-    bool visible = enemyScreenVisible(enemies[i], visx, visy, visd);
-
-    float threat = calculateThreat(enemies[i]);
-    if (visible) threat += 18.0f;  // prefer what is actually on screen
-    if (threat > maxThreat) {
-      maxThreat = threat;
-      targetIndex = i;
-    }
+    if (enemies[i].alive && enemies[i].pos.z > 10.0f) {
+      float threat = calculateThreat(enemies[i]);
+      if (threat > maxThreat) {
+        maxThreat = threat;
+        targetIndex = i;
+      } else if (laserHeat >= 90) {
+    statusLine = "LASER HOT";
+  } else if (isDamaged(DMG_LASER)) {
+    statusLine = "LASER DMG";
   }
-
-  if (laserHeat >= 90) statusLine = "LASER HOT";
-  else if (isDamaged(DMG_LASER)) statusLine = "LASER DMG";
-
-  if (pilot.missileIncoming) {
-    if (hasEquipment(EQ_ECM) && pilot.ecmCooldown == 0 && shipEnergy >= 10.0f) {
-      attemptECM();
-    } else if (hasEquipment(EQ_ECM) && pilot.ecmCooldown > 0) {
-      statusLine = "ECM COOL";
-    } else {
-      shipShield -= 14.0f;
-      shipEnergy -= 4.0f;
-      pilot.missileIncoming = false;
-      statusLine = "MISSILE HIT";
-      playHitSound();
     }
   }
 
@@ -2601,6 +2188,18 @@ void janusCombatDecision() {
 
   SpaceShip &e = enemies[targetIndex];
 
+  if (pilot.missileIncoming) {
+    if (hasEquipment(EQ_ECM)) {
+      pilot.missileIncoming = false;
+      statusLine = "ECM";
+      playToneSafe(520, 50);
+    } else {
+      shipShield -= 8.0f;
+      shipEnergy -= 4.0f;
+      pilot.missileIncoming = false;
+      statusLine = "MISSILE HIT";
+    }
+  }
   float targetYaw = atan2f(e.pos.x, e.pos.z);
   float targetPitch = -atan2f(e.pos.y, e.pos.z);
 
@@ -2609,22 +2208,13 @@ void janusCombatDecision() {
   shipRoll = clampf(-targetYaw * 0.8f, -0.5f, 0.5f);
   shipSpeed = clampf(shipSpeed + 0.002f, 0.10f, 0.40f);
 
-  int tsx, tsy; float td;
-  bool targetVisible = enemyScreenVisible(e, tsx, tsy, td);
-  bool inCross = targetVisible && fabsf(e.pos.x) < 8 && fabsf(e.pos.y) < 8 && e.pos.z < 120;
+  bool inCross = fabsf(e.pos.x) < 8 && fabsf(e.pos.y) < 8 && e.pos.z < 120;
 
-  if (pilot.missiles > 0 &&
-      (e.type == SHIP_CONSTRICTOR || e.type == SHIP_ANACONDA || e.type == SHIP_PYTHON || e.role == ROLE_THARGOID) &&
-      (targetVisible || (e.pos.z < 130 && fabsf(e.pos.x) < 16 && fabsf(e.pos.y) < 16))) {
+  if (pilot.missiles > 0 && (e.type == SHIP_CONSTRICTOR || e.type == SHIP_PYTHON || e.type == SHIP_ANACONDA || e.role == ROLE_BOSS) && e.pos.z < 150) {
     e.hp -= 42.0f;
     pilot.missiles--;
     statusLine = "MISSILE";
-    playToneSafe(180, 80);
-    trainJanus(f, 0.05f);
-  }
-
-  if (!targetVisible) {
-    statusLine = "TRACKING";
+    playToneSafe(300, 80);
   }
 
   if (inCross && laserHeat < 90 && !isDamaged(DMG_LASER)) {
@@ -2654,7 +2244,6 @@ void janusCombatDecision() {
 void updateDockApproach() {
   if (dockPhase == DOCK_NONE) {
     beginDockRun();
-    dockAlignTicks = 0;
     return;
   }
 
@@ -2665,13 +2254,10 @@ void updateDockApproach() {
     shipYaw += clampf(dx * 0.0008f, -0.020f, 0.020f);
     shipPitch += clampf(-dy * 0.0008f, -0.020f, 0.020f);
     shipRoll *= 0.96f;
-    stationPos.x *= 0.96f;
-    stationPos.y *= 0.96f;
     stationPos.z -= clampf(shipSpeed * 2.0f, 0.25f, 0.8f);
 
     if (fabsf(stationPos.x) < 9.0f && fabsf(stationPos.y) < 9.0f && stationPos.z < 95.0f) {
       dockPhase = DOCK_ALIGN;
-      dockAlignTicks = 0;
       statusLine = "DOCK ALIGN";
     }
     return;
@@ -2723,7 +2309,6 @@ void updateDockApproach() {
       dockTimer = 12;
       stationFlowActive = false;
       stationStep = SERVICE_IDLE;
-      alreadyJumpedThisDock = false;
       statusLine = "DOCK OK";
       playDockSound();
     }
@@ -2732,15 +2317,8 @@ void updateDockApproach() {
 
 
 void janusDockedDecision() {
-  // Hard reset of dock-jump latch on every dock decision pass.
-  // This guarantees station logic cannot get stuck in LAUNCH PREP
-  // because of a stale flag from a previous jump/dock cycle.
-  alreadyJumpedThisDock = false;
-  if (jumpInProgress) return;
-
   float f[12];
   buildFeatures(f);
-  updateGoal();
 
   decayLegalStatusInDock();
   updateMissionsOnDock();
@@ -2762,7 +2340,7 @@ void janusDockedDecision() {
   }
 
   refuelAtStation();
-  janusBuyEquipment();
+  autoBuyEquipment();
   janusRestockMissiles();
 
   if (pilot.damagedFlags != DMG_NONE && pilot.credits >= 100) {
@@ -2771,46 +2349,29 @@ void janusDockedDecision() {
     statusLine = "REPAIRED";
   }
 
-  if (hasEquipment(EQ_GAL_HYPERDRIVE) && pilot.kills > 25 && pilot.credits > 800 && pilot.galaxyIndex < 7) {
-    if (pilot.credits > 1200 || learnState.systemDeathPenalty[pilot.currentSystem] > 1.2f) {
-      galacticJump();
-      alreadyJumpedThisDock = false;
-      trainJanus(f, 0.08f);
-      rewardPersonalityFromSuccess();
-      saveBestAgentIfImproved();
-      janus.decisions++;
-      return;
-    }
+  pendingJumpSystem = 255;
+
+  if (hasEquipment(EQ_GAL_HYPERDRIVE) && pilot.kills > 25 && pilot.credits > 1200 && pilot.galaxyIndex < 7) {
+    galacticJump();
+    trainJanus(f, 0.08f);
+    saveBestAgentIfImproved();
+    janus.decisions++;
+    return;
   }
 
   uint8_t target = pickTradeTarget();
-  if (target == pilot.currentSystem || fuelCostTo(target) > pilot.fuel) {
-    launchScene();
-    alreadyJumpedThisDock = false;
-    trainJanus(f, 0.03f);
-    saveBestAgentIfImproved();
-    janus.decisions++;
-    return;
+  if (target != pilot.currentSystem && fuelCostTo(target) <= pilot.fuel) {
+    if (pilot.credits >= 150 || pilot.cargoCount > 0 || canAffordAnyCommodityFor(target)) {
+      pendingJumpSystem = target;
+      if (pilot.credits >= 80) janusPlanTrade(target);
+    }
   }
 
-  janusPlanTrade(target);
-  beginVisibleJump(target);
-
-  if (!jumpInProgress) {
-    launchScene();
-    alreadyJumpedThisDock = false;
-    trainJanus(f, 0.02f);
-    saveBestAgentIfImproved();
-    janus.decisions++;
-    return;
-  }
-
-  alreadyJumpedThisDock = true;
   shipEnergy = clampf(shipEnergy + 4.0f, 0.0f, 100.0f);
   shipShield = clampf(shipShield + 4.0f, 0.0f, 100.0f);
 
+  launchScene();
   trainJanus(f, 0.12f);
-  rewardPersonalityFromSuccess();
   saveBestAgentIfImproved();
   janus.decisions++;
 }
@@ -2822,24 +2383,24 @@ void janusSpaceDecision() {
   }
 
   if (janus.mode == MODE_LAUNCH) {
-    shipSpeed = clampf(shipSpeed + 0.005f, 0.10f, 0.22f);
-    stationPos.z += 2.0f;
-    stationPos.x *= 0.96f;
-    stationPos.y *= 0.96f;
-    shipYaw *= 0.94f;
-    shipPitch *= 0.94f;
-    shipRoll *= 0.94f;
+    shipSpeed = clampf(shipSpeed + 0.004f, 0.10f, 0.20f);
+    stationPos.z += 1.6f;
+    stationPos.x *= 0.97f;
+    stationPos.y *= 0.97f;
+    shipYaw *= 0.96f;
+    shipPitch *= 0.96f;
+    shipRoll *= 0.96f;
     statusLine = "LAUNCH";
-    if (--launchTimer <= 0 || stationPos.z > 420.0f || launchTimer < -100) {
+    if (--launchTimer <= 0 || stationPos.z > 420.0f) {
       janus.mode = MODE_PATROL;
-      patrolTimer = 320 + random(0, 180);
-      currentGoal = GOAL_NONE;
+      patrolTimer = 380 + random(0, 220);
       statusLine = "CRUISE";
     }
     return;
   }
 
   if (janus.mode == MODE_PATROL) {
+    if (launchLockout > 0) launchLockout--;
     shipYaw += sensorBiasYaw * 0.025f + frandRange(-0.003f, 0.003f);
     shipPitch += frandRange(-0.0015f, 0.0015f);
     shipRoll = clampf(shipRoll * 0.97f + frandRange(-0.006f, 0.006f), -0.22f, 0.22f);
@@ -2871,6 +2432,16 @@ void janusSpaceDecision() {
       spawnPoliceWing();
       janus.mode = MODE_COMBAT;
       statusLine = "POLICE";
+      return;
+    }
+
+    // Only allow intersystem jump after a real patrol phase away from station.
+    if (pendingJumpSystem != 255 && launchLockout <= 0 && stationPos.z > 410.0f &&
+        patrolTimer < 260 && pilot.fuel >= fuelCostTo(pendingJumpSystem) &&
+        shipShield > 35.0f && shipEnergy > 35.0f) {
+      beginVisibleJump(pendingJumpSystem);
+      pendingJumpSystem = 255;
+      statusLine = "JUMP";
       return;
     }
 
@@ -2931,11 +2502,10 @@ void updateStars() {
     stars[i].z -= shipSpeed * 4.0f;
     stars[i].x -= shipYaw * 1.5f;
     stars[i].y -= shipPitch * 1.2f;
-    if (stars[i].z < -200.0f || stars[i].z > 200.0f) {
-      stars[i].x = frandRange(-140, 140);
-      stars[i].y = frandRange(-140, 140);
-      stars[i].z = frandRange(-200, 200);
-      if (fabsf(stars[i].z) < 12.0f) stars[i].z = (stars[i].z < 0 ? -24.0f : 24.0f);
+    if (stars[i].z < 10) {
+      stars[i].x = frandRange(-90, 90);
+      stars[i].y = frandRange(-90, 90);
+      stars[i].z = 200;
     }
   }
 }
@@ -3162,36 +2732,13 @@ void logicTick() {
           lastAgentTick = millis();
           if (!stationFlowActive) beginStationFlow();
         }
-      } else if (millis() - lastAgentTick > 180) {
+      } else if (millis() - lastAgentTick > 500) {
         lastAgentTick = millis();
         if (!stationFlowActive) janusDockedDecision();
       }
     }
   } else {
-    // Critical fix: while launching, do NOT let updateGoal pull Janus back into docking logic.
-    if (janus.mode == MODE_LAUNCH) {
-      if (millis() - lastAgentTick > 120) {
-        lastAgentTick = millis();
-        janusSpaceDecision();
-      }
-
-      updateStars();
-      updatePlanetSun();
-      updateTraffic();
-      updateEnemies();
-      updateDebris();
-      updateCanisters();
-      updateEscapePods();
-      updateFuelScoop();
-      updateECMCooldown();
-      processPoliceScanInFlight();
-      updateCollisionAvoidance();
-      updateIntersystemEvents();
-      updateShipState();
-      return;
-    }
-
-    updateGoal();
+    if (janus.mode != MODE_LAUNCH) updateGoal();
 
     if (millis() - lastAgentTick > 220) {
       lastAgentTick = millis();
@@ -3220,8 +2767,12 @@ void logicTick() {
         }
 
         case GOAL_DOCK:
-          janus.mode = MODE_RETURN;
-          updateDockApproach();
+          if (launchLockout > 0) {
+            janusSpaceDecision();
+          } else {
+            janus.mode = MODE_RETURN;
+            updateDockApproach();
+          }
           break;
 
         default:
@@ -3236,10 +2787,7 @@ void logicTick() {
     updateEnemies();
     updateDebris();
     updateCanisters();
-    updateEscapePods();
     updateFuelScoop();
-    updateECMCooldown();
-    processPoliceScanInFlight();
     updateCollisionAvoidance();
     updateIntersystemEvents();
     updateShipState();
@@ -3263,14 +2811,9 @@ void setup() {
   randomSeed((uint32_t)esp_random());
 
   loadState();
-  pilot.passengerJob.active = false;
-  pilot.passengerJob.targetSystem = 0;
-  pilot.passengerJob.reward = 0;
-  pilot.ecmCooldown = 0;
   loadLearnState();
   loadBestAgentIfAvailable();
   generateGalaxy(pilot.galaxyIndex);
-  selectStationType();
 
   M5.Display.setRotation(0);
   applyBrightness();
@@ -3279,11 +2822,7 @@ void setup() {
   resetEnemies();
   resetDebris();
   resetCanisters();
-  resetEscapePods();
   initTraffic();
-  pilot.passengerJob.active = false;
-  pilot.passengerJob.targetSystem = 0;
-  pilot.passengerJob.reward = 0;
 
   stationPos = {0.0f, 0.0f, 250.0f};
   planetPos  = {0.0f, 0.0f, 320.0f};
