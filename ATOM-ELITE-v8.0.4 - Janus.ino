@@ -3,7 +3,7 @@
 #include <math.h>
 
 // =====================================================
-// ATOM ELITE - JANUS ATMOSPHERE PACK v8.0.4
+// ATOM ELITE - JANUS ATMOSPHERE PACK v8.0.6
 // Atmosphere Pack: station variants, escape pods, contraband checks, jump tunnel, dock melody, dock/star fixes.
 // =====================================================
 
@@ -1711,6 +1711,7 @@ void beginStationFlow() {
   stationStep = SERVICE_MARKET;
   stationStepTimer = 40;
   uiMode = UI_MARKET;
+  alreadyJumpedThisDock = false;
   statusLine = "MARKET";
 }
 
@@ -2722,6 +2723,7 @@ void updateDockApproach() {
       dockTimer = 12;
       stationFlowActive = false;
       stationStep = SERVICE_IDLE;
+      alreadyJumpedThisDock = false;
       statusLine = "DOCK OK";
       playDockSound();
     }
@@ -2730,7 +2732,11 @@ void updateDockApproach() {
 
 
 void janusDockedDecision() {
-  if (alreadyJumpedThisDock || jumpInProgress) return;
+  // Hard reset of dock-jump latch on every dock decision pass.
+  // This guarantees station logic cannot get stuck in LAUNCH PREP
+  // because of a stale flag from a previous jump/dock cycle.
+  alreadyJumpedThisDock = false;
+  if (jumpInProgress) return;
 
   float f[12];
   buildFeatures(f);
@@ -2778,8 +2784,6 @@ void janusDockedDecision() {
   }
 
   uint8_t target = pickTradeTarget();
-
-  // If there is no better reachable system, do not sit in dock forever.
   if (target == pilot.currentSystem || fuelCostTo(target) > pilot.fuel) {
     launchScene();
     alreadyJumpedThisDock = false;
@@ -2792,7 +2796,6 @@ void janusDockedDecision() {
   janusPlanTrade(target);
   beginVisibleJump(target);
 
-  // If for any reason jump did not actually start, force launch so Janus leaves the dock.
   if (!jumpInProgress) {
     launchScene();
     alreadyJumpedThisDock = false;
@@ -2803,7 +2806,6 @@ void janusDockedDecision() {
   }
 
   alreadyJumpedThisDock = true;
-
   shipEnergy = clampf(shipEnergy + 4.0f, 0.0f, 100.0f);
   shipShield = clampf(shipShield + 4.0f, 0.0f, 100.0f);
 
@@ -2828,7 +2830,7 @@ void janusSpaceDecision() {
     shipPitch *= 0.94f;
     shipRoll *= 0.94f;
     statusLine = "LAUNCH";
-    if (--launchTimer <= 0 || stationPos.z > 420.0f) {
+    if (--launchTimer <= 0 || stationPos.z > 420.0f || launchTimer < -100) {
       janus.mode = MODE_PATROL;
       patrolTimer = 320 + random(0, 180);
       currentGoal = GOAL_NONE;
