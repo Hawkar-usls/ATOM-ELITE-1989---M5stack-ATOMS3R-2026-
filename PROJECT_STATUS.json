@@ -4,10 +4,14 @@
   "repository": "https://github.com/Hawkar-usls/ATOM-ELITE-1989---M5stack-ATOMS3R-2026-",
   "portfolio_class": "creative_embedded_game",
   "last_reviewed": "2026-08-09",
+  "maturity": "ACTIVE_CREATIVE_PROTOTYPE",
+  "completion_status": "PROTOTYPE",
   "summary": "Retro space-trading/combat game experiment for M5Stack ATOMS3R-family hardware with an adaptive game-agent component.",
   "flagship_research": false,
   "scientific_result_claimed": false,
   "agi_claimed": false,
   "adaptive_game_agent_is_scientific_ai_benchmark": false,
+  "production_readiness": "NOT_ESTABLISHED",
+  "visibility_policy": "https://github.com/Hawkar-usls/Janus/blob/main/portfolio-visibility.json",
   "note": "References to Elite describe creative inspiration; third-party rights and licenses remain with their respective owners."
 }
