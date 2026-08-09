@@ -3,48 +3,51 @@
 # ATOM ELITE
 ### Retro space game for M5Stack ATOMS3R
 
-`embedded game` · `procedural systems` · `adaptive in-game agent`
+![Status](https://img.shields.io/badge/status-active%20creative%20prototype-2f81f7)
+![Class](https://img.shields.io/badge/class-embedded%20game-6e7681)
 
 </div>
 
-ATOM ELITE is a creative embedded game inspired by classic space-trading and wireframe-combat games. It runs on M5Stack ATOMS3R-family hardware and includes a small adaptive in-game agent named Janus.
+## Status
 
-It is a **game/firmware project**, not an AI benchmark or research claim.
+**Active Creative Prototype.** The game is implemented as an evolving firmware project, but gameplay balance, hardware assumptions, content, and documentation may continue to change.
 
-Machine-readable status: [`PROJECT_STATUS.json`](PROJECT_STATUS.json)
+## Abstract
 
-## Features
+ATOM ELITE is a compact embedded space-trading/combat game for M5Stack ATOMS3R-family hardware, inspired by classic wireframe space games. It includes a small adaptive in-game agent named Janus.
+
+## Implemented scope
 
 - procedural multi-galaxy game world;
-- trading, cargo and equipment systems;
+- trading, cargo, and equipment systems;
 - wireframe space combat;
-- missions, stations, docking and jump sequences;
+- missions, stations, docking, and jump sequences;
 - IMU-driven input;
 - persistent save data;
 - adaptive game-agent state saved between sessions.
 
-The adaptive agent changes game behavior from stored outcomes and state. Terms such as `learning`, `personality` or `brain` describe game mechanics; they do not establish AGI, consciousness or general learning capability.
-
 ## Boundary
 
 ```text
+MATURITY = ACTIVE_CREATIVE_PROTOTYPE
 PROJECT_CLASS = CREATIVE_EMBEDDED_GAME
 FLAGSHIP_RESEARCH = FALSE
 SCIENTIFIC_AI_BENCHMARK = FALSE
 AGI_OR_CONSCIOUSNESS = NOT_CLAIMED
+PRODUCT_READINESS = NOT_ESTABLISHED
 ```
 
-References to **Elite** describe creative inspiration. Third-party names, game rights, libraries and assets remain with their respective owners.
+Terms such as `learning`, `personality`, or `brain` describe game mechanics. They do not establish AGI, consciousness, or general learning capability.
 
-## Hardware / run
+## Review / run
 
-- M5Stack ATOMS3R-family device;
-- compatible audio hardware if sound is desired;
-- Arduino IDE with `M5Unified`;
-- LittleFS enabled as required by the sketch.
+- Machine-readable project status: [`PROJECT_STATUS.json`](PROJECT_STATUS.json)
+- Portfolio maturity/visibility: [`portfolio-visibility.json`](https://github.com/Hawkar-usls/Janus/blob/main/portfolio-visibility.json)
 
-Open the current `.ino`, select the documented board/flash layout and upload. Review the exact sketch and local hardware configuration before flashing.
+Target hardware: M5Stack ATOMS3R-family device. Review the current sketch, required libraries, board selection, and flash layout before uploading.
 
-## License
+## Attribution / license
 
-See the repository license for code authored here; third-party components retain their own licenses.
+References to **Elite** describe creative inspiration. Third-party names, assets, libraries, and rights remain with their respective owners. See repository license files for code authored here.
+
+Presentation follows the account's [public repository standard](https://github.com/Hawkar-usls/Janus/blob/main/docs/PUBLIC_REPOSITORY_PRESENTATION_STANDARD.md). No affiliation with MIT is implied by the presentation style.
