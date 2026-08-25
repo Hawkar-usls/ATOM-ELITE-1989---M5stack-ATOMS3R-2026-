@@ -1,0 +1,21 @@
+{
+  "schema": "janus.organism.link.v1",
+  "organism_id": "JANUS_FEDERATED_ORGANISM",
+  "organism_repository": "Hawkar-usls/Janus",
+  "repository_ecology": "organism/JANUS_REPOSITORY_ECOLOGY_v1.3.json",
+  "membership": {
+    "class": "SUBTISSUE",
+    "subtissue_key": "atom_elite_embedded_world",
+    "parent_organ": "simulation_habitat",
+    "role": "EMBEDDED_RETRO_GAME_WORLD",
+    "authority": "GAME_SCOPE_ONLY",
+    "evidence_authority": false
+  },
+  "authority_delta": 0,
+  "write_back_default": "DENY",
+  "boundaries": [
+    "GAME_BEHAVIOR != WORLD_EVIDENCE",
+    "EMBEDDED_SIMULATION != PHYSICAL_VALIDATION",
+    "SUBTISSUE_PARENT != AUTHORITY_INHERITANCE"
+  ]
+}
