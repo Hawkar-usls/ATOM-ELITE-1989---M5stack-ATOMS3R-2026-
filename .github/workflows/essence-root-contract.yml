@@ -1,0 +1,35 @@
+name: ESSENCE single-root offline contract
+on:
+  pull_request:
+    paths: ['.janus/essence/**', '.github/workflows/essence-root-contract.yml']
+permissions:
+  contents: read
+jobs:
+  root-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - env:
+          ESSENCE_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import importlib.util, json, os
+          from pathlib import Path
+          base=Path('.janus/essence')
+          m=json.loads((base/'manifest.json').read_text())
+          spec=importlib.util.spec_from_file_location('root',base/'kernel.py')
+          k=importlib.util.module_from_spec(spec);spec.loader.exec_module(k)
+          spec=importlib.util.spec_from_file_location('factory',base/'collective_seed.py')
+          f=importlib.util.module_from_spec(spec);spec.loader.exec_module(f)
+          k.validate_manifest(m,os.environ['ESSENCE_REPO'])
+          f.validate_manifest(m,os.environ['ESSENCE_REPO'])
+          f.validate_innovations(json.loads((base/'innovations.json').read_text()),os.environ['ESSENCE_REPO'])
+          assert len(list(base.glob('kernel.py')))==1
+          assert not m['enabled'] and not any(m['capabilities'].values())
+          assert set(x['role'] for x in m['microkernels'])==set(f.ROLES)
+          print('SINGLETON_ROOT_PASS')
+          PY
